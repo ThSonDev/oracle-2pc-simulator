@@ -1,0 +1,25 @@
+# Python
+__pycache__/
+*.pyc
+*.py[cod]
+
+# IDE
+.vscode/
+.idea/
+
+# Virtual env
+.venv/
+.env
+
+# VSCode
+.vscode/
+
+# OS
+.DS_Store
+
+# Claude
+.claude
+CLAUDE.md
+
+# Reports
+report*.md

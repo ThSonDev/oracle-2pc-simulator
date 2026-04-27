@@ -1,0 +1,100 @@
+services:
+
+  # oracle_node_a acts as the global coordinator for all distributed
+  # transactions.  It hosts the node_b_link private database link and is the
+  # node on which DBA_2PC_PENDING is monitored for in-doubt transactions.
+  node_a:
+    image: gvenzl/oracle-free:23-slim-faststart
+    container_name: oracle_node_a
+    environment:
+      ORACLE_PASSWORD: ${ORACLE_PASSWORD}
+      APP_USER: ${APP_USER}
+      APP_USER_PASSWORD: ${APP_USER_PASSWORD}
+    ports:
+      - "1521:1521"
+    volumes:
+      - node_a_data:/opt/oracle/oradata
+      # Init script runs once on first boot (empty volume).  Creates app_user
+      # schema objects, grants recovery privileges, and creates node_b_link.
+      - ./scripts/00_grants_a.sh:/docker-entrypoint-initdb.d/00_grants_a.sh
+    networks:
+      - oracle_net
+    healthcheck:
+      test: ["CMD-SHELL", "healthcheck.sh"]
+      interval: 20s
+      timeout: 10s
+      retries: 20
+      start_period: 120s
+
+  # oracle_node_b acts as the remote participant (local site) in distributed
+  # transactions.  It receives PREPARE and COMMIT messages from Node A via the
+  # database link session that Node A's Oracle server process manages.
+  node_b:
+    image: gvenzl/oracle-free:23-slim-faststart
+    container_name: oracle_node_b
+    environment:
+      ORACLE_PASSWORD: ${ORACLE_PASSWORD}
+      APP_USER: ${APP_USER}
+      APP_USER_PASSWORD: ${APP_USER_PASSWORD}
+    ports:
+      - "1522:1521"
+    volumes:
+      - node_b_data:/opt/oracle/oradata
+      # Init script runs once on first boot.  Creates app_user schema objects
+      # and grants recovery privileges.  No database link is created here.
+      - ./scripts/00_grants_b.sh:/docker-entrypoint-initdb.d/00_grants_b.sh
+    networks:
+      - oracle_net
+    healthcheck:
+      test: ["CMD-SHELL", "healthcheck.sh"]
+      interval: 20s
+      timeout: 10s
+      retries: 20
+      start_period: 120s
+
+  # streamlit_app hosts the Python application and the pytest test suite.
+  # user: root is required so the process can read /var/run/docker.sock;
+  # the Docker SDK uses the socket in Scenario 3 to disconnect and reconnect
+  # Node B's container from the oracle_net bridge network.
+  streamlit:
+    build:
+      context: .
+      dockerfile: Dockerfile
+    container_name: streamlit_app
+    user: root
+    environment:
+      NODE_A_HOST: node_a
+      NODE_B_HOST: node_b
+      APP_USER: ${APP_USER}
+      APP_USER_PASSWORD: ${APP_USER_PASSWORD}
+      NODE_A_CONTAINER: ${NODE_A_CONTAINER}
+      NODE_B_CONTAINER: ${NODE_B_CONTAINER}
+      COMPOSE_PROJECT_NAME: ${COMPOSE_PROJECT_NAME}
+    ports:
+      - "8501:8501"
+    volumes:
+      # Bind-mount src/ so code changes are reflected without rebuilding.
+      - ./src:/app/src
+      # Docker socket gives the Python docker SDK access to the daemon API,
+      # which is needed to disconnect/reconnect Node B in Scenario 3.
+      - /var/run/docker.sock:/var/run/docker.sock
+    networks:
+      - oracle_net
+    depends_on:
+      node_a:
+        condition: service_healthy
+      node_b:
+        condition: service_healthy
+    restart: unless-stopped
+
+networks:
+  # Named bridge network shared by all three services.  The explicit name
+  # matches DOCKER_NETWORK_NAME in src/config.py so the Docker SDK calls in
+  # Scenario 3 resolve the correct network object.
+  oracle_net:
+    driver: bridge
+    name: oracle-2pc-simulator_oracle_net
+
+volumes:
+  node_a_data:
+  node_b_data:
