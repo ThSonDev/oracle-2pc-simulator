@@ -36,6 +36,7 @@ import pandas as pd
 
 from src.config import NODE_B_CONTAINER, DOCKER_NETWORK_NAME
 from src.db import get_connection, fetch_accounts, fetch_pending_transactions
+from src.strings import T
 
 
 def _disconnect_node_b(client: docker.DockerClient) -> None:
@@ -73,7 +74,9 @@ def _reconnect_node_b(client: docker.DockerClient) -> None:
             raise
 
 
-def _simulate_failure(src_id: int, dst_id: int, amount: float, log: list) -> dict:
+def _simulate_failure(
+    src_id: int, dst_id: int, amount: float, log: list, lang: str = "VI"
+) -> dict:
     """
     Execute a distributed transaction and disconnect Node B before the commit.
 
@@ -98,6 +101,8 @@ def _simulate_failure(src_id: int, dst_id: int, amount: float, log: list) -> dic
     log:
         Mutable list to which step-by-step status strings are appended.
         The caller displays this list in the UI after the function returns.
+    lang:
+        Language code for log messages ("VI" or "EN").
 
     Returns
     -------
@@ -116,34 +121,34 @@ def _simulate_failure(src_id: int, dst_id: int, amount: float, log: list) -> dic
 
     try:
         with conn.cursor() as cur:
-            log.append("Starting distributed transaction on Node A...")
+            log.append(T("s3_log_start", lang))
             cur.execute(
                 "UPDATE account SET balance = balance - :1 WHERE id = :2",
                 [amount, src_id],
             )
-            log.append(f"  Node A: deducted {amount:.2f} from account id={src_id}.")
+            log.append(T("s3_log_node_a_deducted", lang, amount=amount, src_id=src_id))
 
             cur.execute(
                 "UPDATE account@node_b_link SET balance = balance + :1 WHERE id = :2",
                 [amount, dst_id],
             )
-            log.append(f"  Node B (via DB link): credited {amount:.2f} to account id={dst_id}.")
+            log.append(T("s3_log_node_b_credited", lang, amount=amount, dst_id=dst_id))
 
-            log.append("Disconnecting Node B from Docker network to simulate crash...")
+            log.append(T("s3_log_disconnecting", lang))
             _disconnect_node_b(client)
-            log.append("  Node B is now unreachable.")
+            log.append(T("s3_log_disconnected", lang))
 
-            log.append("Attempting COMMIT (Oracle will try 2PC PREPARE + COMMIT)...")
+            log.append(T("s3_log_attempting_commit", lang))
             try:
                 conn.commit()
-                log.append("  COMMIT completed (Oracle may have used a cached connection).")
+                log.append(T("s3_log_commit_ok", lang))
             except oracledb.DatabaseError as exc:
                 (error,) = exc.args
-                log.append(f"  COMMIT FAILED: {error.message.strip()}")
+                log.append(T("s3_log_commit_fail", lang, msg=error.message.strip()))
                 result["error"] = error.message.strip()
     except Exception as exc:
         result["error"] = str(exc)
-        log.append(f"  Unexpected error: {exc}")
+        log.append(T("s3_log_unexpected", lang, exc=exc))
         try:
             conn.rollback()
         except Exception:
@@ -154,28 +159,28 @@ def _simulate_failure(src_id: int, dst_id: int, amount: float, log: list) -> dic
         except Exception:
             pass
 
-    log.append("Reconnecting Node B to Docker network...")
+    log.append(T("s3_log_reconnecting", lang))
     try:
         _reconnect_node_b(client)
-        log.append("  Node B reconnected.")
+        log.append(T("s3_log_reconnected", lang))
     except Exception as exc:
-        log.append(f"  Reconnect warning: {exc}")
+        log.append(T("s3_log_reconnect_warn", lang, exc=exc))
 
     # Query DBA_2PC_PENDING before RECO has a chance to auto-resolve any
     # in-doubt entry now that Node B is back on the network.
-    log.append("Querying DBA_2PC_PENDING on Node A...")
+    log.append(T("s3_log_querying_pending", lang))
     try:
         pending_conn = get_connection("node_a")
         result["pending"] = fetch_pending_transactions(pending_conn)
         pending_conn.close()
-        log.append(f"  Found {len(result['pending'])} in-doubt transaction(s).")
+        log.append(T("s3_log_found_pending", lang, n=len(result["pending"])))
     except Exception as exc:
-        log.append(f"  Could not query DBA_2PC_PENDING: {exc}")
+        log.append(T("s3_log_query_fail", lang, exc=exc))
 
     return result
 
 
-def _force_recover(local_tran_id: str, action: str, log: list) -> None:
+def _force_recover(local_tran_id: str, action: str, log: list, lang: str = "VI") -> None:
     """
     Manually resolve an in-doubt transaction using COMMIT FORCE or ROLLBACK FORCE.
 
@@ -200,32 +205,31 @@ def _force_recover(local_tran_id: str, action: str, log: list) -> None:
         Either "commit" or "rollback".
     log:
         Mutable list to which the outcome message is appended.
+    lang:
+        Language code for log messages ("VI" or "EN").
     """
     conn = get_connection("node_a", autocommit=True)
     try:
         with conn.cursor() as cur:
             if action == "commit":
                 cur.execute(f"COMMIT FORCE '{local_tran_id}'")
-                log.append(f"COMMIT FORCE '{local_tran_id}' succeeded.")
+                log.append(T("s3_log_commit_force_ok", lang, tran_id=local_tran_id))
             else:
                 cur.execute(f"ROLLBACK FORCE '{local_tran_id}'")
-                log.append(f"ROLLBACK FORCE '{local_tran_id}' succeeded.")
+                log.append(T("s3_log_rollback_force_ok", lang, tran_id=local_tran_id))
     except oracledb.DatabaseError as exc:
         (error,) = exc.args
-        log.append(f"Force recover error: {error.message.strip()}")
+        log.append(T("s3_log_force_error", lang, msg=error.message.strip()))
     finally:
         conn.close()
 
 
 def render() -> None:
     """Render the Scenario 3 page in the Streamlit application."""
-    st.header("Scenario 3: Network Failure / In-Doubt Transaction")
-    st.write(
-        "This scenario starts a distributed transaction and then severs Node B's "
-        "network connection just before the commit phase.  Oracle cannot complete "
-        "2PC and the transaction is recorded in DBA_2PC_PENDING as in-doubt.  "
-        "You can then manually force a commit or rollback."
-    )
+    lang = st.session_state.get("lang", "VI")
+
+    st.header(T("s3_header", lang))
+    st.write(T("s3_intro", lang))
 
     if "s3_log" not in st.session_state:
         st.session_state.s3_log = []
@@ -246,52 +250,52 @@ def render() -> None:
 
     col1, col2 = st.columns(2)
     with col1:
-        src_label = st.selectbox("Debit account (Node A)", list(a_opts.keys()), key="s3_src")
+        src_label = st.selectbox(T("s3_debit_acct", lang), list(a_opts.keys()), key="s3_src")
         src_id = a_opts[src_label]
     with col2:
-        dst_label = st.selectbox("Credit account (Node B)", list(b_opts.keys()), key="s3_dst")
+        dst_label = st.selectbox(T("s3_credit_acct", lang), list(b_opts.keys()), key="s3_dst")
         dst_id = b_opts[dst_label]
 
-    amount = st.number_input("Transfer amount", min_value=1.0, max_value=50000.0, value=200.0, step=50.0, key="s3_amount")
+    amount = st.number_input(T("s3_amount", lang), min_value=1.0, max_value=50000.0, value=200.0, step=50.0, key="s3_amount")
 
-    if st.button("Simulate Network Failure During Commit", type="primary"):
+    if st.button(T("s3_btn_simulate", lang), type="primary"):
         st.session_state.s3_log = []
         st.session_state.s3_pending = []
         st.session_state.s3_recovery_log = []
-        with st.spinner("Simulating network failure..."):
-            result = _simulate_failure(src_id, dst_id, amount, st.session_state.s3_log)
+        with st.spinner(T("s3_spinner", lang)):
+            result = _simulate_failure(src_id, dst_id, amount, st.session_state.s3_log, lang)
             st.session_state.s3_pending = result.get("pending", [])
         st.rerun()
 
     if st.session_state.s3_log:
-        st.subheader("Execution Log")
+        st.subheader(T("s3_log_header", lang))
         for line in st.session_state.s3_log:
             st.text(line)
 
     if st.session_state.s3_pending:
-        st.subheader("DBA_2PC_PENDING - In-Doubt Transactions")
+        st.subheader(T("s3_pending_header", lang))
         df = pd.DataFrame(st.session_state.s3_pending)
         st.dataframe(df, use_container_width=True, hide_index=True)
 
-        st.subheader("Manual Recovery")
+        st.subheader(T("s3_recovery_header", lang))
         tran_ids = [r["local_tran_id"] for r in st.session_state.s3_pending]
-        selected_tran = st.selectbox("Select transaction to resolve", tran_ids, key="s3_tran_sel")
+        selected_tran = st.selectbox(T("s3_tran_select", lang), tran_ids, key="s3_tran_sel")
 
         col_commit, col_rollback = st.columns(2)
         with col_commit:
-            if st.button("Force Commit", key="s3_force_commit"):
-                _force_recover(selected_tran, "commit", st.session_state.s3_recovery_log)
+            if st.button(T("s3_btn_commit_force", lang), key="s3_force_commit"):
+                _force_recover(selected_tran, "commit", st.session_state.s3_recovery_log, lang)
                 st.rerun()
         with col_rollback:
-            if st.button("Force Rollback", key="s3_force_rollback"):
-                _force_recover(selected_tran, "rollback", st.session_state.s3_recovery_log)
+            if st.button(T("s3_btn_rollback_force", lang), key="s3_force_rollback"):
+                _force_recover(selected_tran, "rollback", st.session_state.s3_recovery_log, lang)
                 st.rerun()
 
         if st.session_state.s3_recovery_log:
             for line in st.session_state.s3_recovery_log:
                 st.write(line)
 
-    if st.button("Refresh DBA_2PC_PENDING", key="s3_refresh"):
+    if st.button(T("s3_btn_refresh", lang), key="s3_refresh"):
         try:
             pending_conn = get_connection("node_a")
             st.session_state.s3_pending = fetch_pending_transactions(pending_conn)
@@ -301,21 +305,21 @@ def render() -> None:
         st.rerun()
 
     st.divider()
-    st.subheader("Current Balances")
+    st.subheader(T("s3_balances_header", lang))
     col_a, col_b = st.columns(2)
     try:
         c_a = get_connection("node_a")
         with col_a:
-            st.write("Node A")
+            st.write(T("s3_node_a", lang))
             st.dataframe(pd.DataFrame(fetch_accounts(c_a)), use_container_width=True, hide_index=True)
         c_a.close()
     except Exception as exc:
-        col_a.error(f"Node A unreachable: {exc}")
+        col_a.error(T("s3_node_a_unreachable", lang, exc=exc))
     try:
         c_b = get_connection("node_b")
         with col_b:
-            st.write("Node B")
+            st.write(T("s3_node_b", lang))
             st.dataframe(pd.DataFrame(fetch_accounts(c_b)), use_container_width=True, hide_index=True)
         c_b.close()
     except Exception as exc:
-        col_b.error(f"Node B unreachable: {exc}")
+        col_b.error(T("s3_node_b_unreachable", lang, exc=exc))

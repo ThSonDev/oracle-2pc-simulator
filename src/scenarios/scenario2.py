@@ -27,6 +27,7 @@ import streamlit as st
 import pandas as pd
 
 from src.db import get_connection, fetch_accounts
+from src.strings import T
 
 
 def _lock_holder(
@@ -34,6 +35,7 @@ def _lock_holder(
     hold_seconds: int,
     status_list: list,
     release_event: threading.Event,
+    lang: str = "VI",
 ) -> None:
     """
     Acquire an exclusive row lock on the given account and hold it.
@@ -58,6 +60,8 @@ def _lock_holder(
         Shared list to which status messages are appended.
     release_event:
         When this event is set the lock is released immediately.
+    lang:
+        Language code for log messages ("VI" or "EN").
     """
     conn = None
     try:
@@ -70,14 +74,17 @@ def _lock_holder(
                 [account_id],
             )
             row = cur.fetchone()
-            status_list.append(f"Lock acquired on account id={account_id} (name={row[1]}, balance={row[2]:.2f}).")
+            status_list.append(
+                T("s2_lock_acquired_msg", lang,
+                  account_id=account_id, name=row[1], balance=float(row[2]))
+            )
             release_event.wait(timeout=hold_seconds)
         # Rolling back releases the row lock and discards any uncommitted
         # changes.  No actual UPDATE was issued, so the balance is unchanged.
         conn.rollback()
-        status_list.append("Lock released (transaction rolled back).")
+        status_list.append(T("s2_lock_released_msg", lang))
     except Exception as exc:
-        status_list.append(f"Lock holder error: {exc}")
+        status_list.append(T("s2_lock_error_msg", lang, exc=exc))
     finally:
         if conn:
             try:
@@ -143,12 +150,10 @@ def _competing_update(account_id: int, increment: float, wait_timeout_s: int) ->
 
 def render() -> None:
     """Render the Scenario 2 page in the Streamlit application."""
-    st.header("Scenario 2: Concurrency Conflict")
-    st.write(
-        "A background thread acquires a row-level lock via SELECT ... FOR UPDATE. "
-        "A competing UPDATE on the same row will block until the first transaction "
-        "releases the lock."
-    )
+    lang = st.session_state.get("lang", "VI")
+
+    st.header(T("s2_header", lang))
+    st.write(T("s2_intro", lang))
 
     if "lock_status" not in st.session_state:
         st.session_state.lock_status = []
@@ -166,10 +171,10 @@ def render() -> None:
 
     col1, col2 = st.columns(2)
     with col1:
-        lock_label = st.selectbox("Account to lock", list(a_opts.keys()), key="lock_acct")
+        lock_label = st.selectbox(T("s2_acct_select", lang), list(a_opts.keys()), key="lock_acct")
         lock_id = a_opts[lock_label]
     with col2:
-        hold_seconds = st.slider("Hold lock for (seconds)", min_value=5, max_value=60, value=20)
+        hold_seconds = st.slider(T("s2_hold_slider", lang), min_value=5, max_value=60, value=20)
 
     col_a, col_b, col_c = st.columns(3)
 
@@ -178,14 +183,15 @@ def render() -> None:
             st.session_state.lock_thread is not None
             and st.session_state.lock_thread.is_alive()
         )
-        if st.button("Acquire Lock (background)", disabled=lock_btn_disabled):
+        if st.button(T("s2_btn_acquire", lang), disabled=lock_btn_disabled):
             st.session_state.lock_status = []
             st.session_state.competing_result = None
             event = threading.Event()
             st.session_state.release_event = event
+            # Capture lang at thread-start time; session_state is not thread-safe.
             t = threading.Thread(
                 target=_lock_holder,
-                args=(lock_id, hold_seconds, st.session_state.lock_status, event),
+                args=(lock_id, hold_seconds, st.session_state.lock_status, event, lang),
                 daemon=True,
             )
             st.session_state.lock_thread = t
@@ -200,8 +206,8 @@ def render() -> None:
             st.session_state.lock_thread is not None
             and st.session_state.lock_thread.is_alive()
         )
-        if st.button("Attempt Competing Update", disabled=not lock_active):
-            with st.spinner("Attempting UPDATE (will block until lock is released)..."):
+        if st.button(T("s2_btn_compete", lang), disabled=not lock_active):
+            with st.spinner(T("s2_spinner_compete", lang)):
                 result = _competing_update(lock_id, increment=1.0, wait_timeout_s=hold_seconds + 10)
                 st.session_state.competing_result = result
                 st.rerun()
@@ -212,42 +218,36 @@ def render() -> None:
             and st.session_state.lock_thread is not None
             and st.session_state.lock_thread.is_alive()
         )
-        if st.button("Release Lock", disabled=not release_active):
+        if st.button(T("s2_btn_release", lang), disabled=not release_active):
             if st.session_state.release_event:
                 st.session_state.release_event.set()
             time.sleep(0.5)
             st.rerun()
 
     st.divider()
-    st.subheader("Lock Status Log")
+    st.subheader(T("s2_log_header", lang))
 
     thread = st.session_state.lock_thread
     if thread is not None:
         is_alive = thread.is_alive()
         if is_alive:
-            st.info("Lock is currently ACTIVE (background thread holds the row lock).")
+            st.info(T("s2_lock_active", lang))
         else:
-            st.success("Lock thread has finished.")
+            st.success(T("s2_lock_finished", lang))
 
     for msg in st.session_state.lock_status:
         st.write(f"  {msg}")
 
     result = st.session_state.competing_result
     if result:
-        st.subheader("Competing Update Result")
+        st.subheader(T("s2_compete_header", lang))
         if result["status"] == "success":
-            st.success(
-                f"UPDATE succeeded after {result['elapsed']:.2f}s "
-                f"(balance incremented by {result['increment']:.2f})."
-            )
+            st.success(T("s2_compete_success", lang, elapsed=result["elapsed"], increment=result["increment"]))
         else:
-            st.warning(
-                f"UPDATE timed out or was blocked after {result['elapsed']:.2f}s. "
-                f"Oracle response: {result['message']}"
-            )
+            st.warning(T("s2_compete_blocked", lang, elapsed=result["elapsed"], message=result["message"]))
 
     st.divider()
-    st.subheader("Current Account Balances (Node A)")
+    st.subheader(T("s2_balances_header", lang))
     conn_a = get_connection("node_a")
     current = fetch_accounts(conn_a)
     conn_a.close()

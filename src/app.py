@@ -7,8 +7,9 @@ Provides a four-page interactive GUI:
   - Scenario 2: row-level locking and competing update demonstration.
   - Scenario 3: network failure simulation and in-doubt transaction recovery.
 
-Navigation is handled by a sidebar radio widget.  Each page delegates to the
-render() function in its corresponding scenario module.
+Navigation and all visible text are available in Vietnamese (VI, default) and
+English (EN).  The language is selected via a radio widget at the top of the
+sidebar and stored in st.session_state["lang"].
 """
 
 import streamlit as st
@@ -16,6 +17,7 @@ import pandas as pd
 
 from src.db import get_connection, fetch_accounts, get_total_balance
 from src.scenarios import scenario1, scenario2, scenario3
+from src.strings import T
 
 
 st.set_page_config(
@@ -35,26 +37,29 @@ def _cluster_health_page() -> None:
     error rather than raising an exception, so a partial outage still renders
     the available node's data.
     """
-    st.header("Cluster Health")
-    st.write("Live status of both Oracle nodes and the DB link.")
+    lang = st.session_state.get("lang", "VI")
 
-    for node, label in [("node_a", "Node A (Global Coordinator)"), ("node_b", "Node B (Local Site)")]:
+    st.header(T("health_header", lang))
+    st.write(T("health_intro", lang))
+
+    for node, label_key in [("node_a", "node_a_label"), ("node_b", "node_b_label")]:
+        label = T(label_key, lang)
         try:
             conn = get_connection(node)
             accounts = fetch_accounts(conn)
             total = get_total_balance(conn)
             conn.close()
-            st.success(f"{label}: ONLINE")
+            st.success(f"{label}: {T('status_online', lang)}")
             st.dataframe(
                 pd.DataFrame(accounts),
                 use_container_width=True,
                 hide_index=True,
             )
-            st.write(f"Total balance on {label}: {total:.2f}")
+            st.write(T("balance_total", lang, label=label, total=total))
         except Exception as exc:
-            st.error(f"{label}: OFFLINE — {exc}")
+            st.error(f"{label}: {T('status_offline', lang)} — {exc}")
 
-    st.subheader("DB Link Verification")
+    st.subheader(T("dblink_header", lang))
     try:
         conn = get_connection("node_a")
         with conn.cursor() as cur:
@@ -65,22 +70,36 @@ def _cluster_health_page() -> None:
             cur.execute("SELECT COUNT(*) FROM account@node_b_link")
             count = cur.fetchone()[0]
         conn.close()
-        st.success(f"DB link 'node_b_link' is working — {count} row(s) visible on Node B.")
+        st.success(T("dblink_ok", lang, count=count))
     except Exception as exc:
-        st.error(f"DB link check failed: {exc}")
+        st.error(T("dblink_fail", lang, exc=exc))
 
-
-PAGE_MAP = {
-    "Cluster Health": _cluster_health_page,
-    "Scenario 1: Successful 2PC Transfer": scenario1.render,
-    "Scenario 2: Concurrency Conflict": scenario2.render,
-    "Scenario 3: Network Failure / In-Doubt": scenario3.render,
-}
 
 with st.sidebar:
     st.title("Oracle 2PC Simulator")
-    st.caption("Two-Phase Commit and Concurrency Control Demo")
-    st.divider()
-    page = st.radio("Navigate", list(PAGE_MAP.keys()), label_visibility="collapsed")
 
-PAGE_MAP[page]()
+    # Language selector stored in st.session_state["lang"] so all pages can
+    # read the current language from session state without extra parameters.
+    lang = st.radio(
+        T("lang_label", st.session_state.get("lang", "VI")),
+        ["VI", "EN"],
+        index=0,
+        key="lang",
+        horizontal=True,
+    )
+
+    st.caption(T("app_caption", lang))
+    st.divider()
+
+    page_defs = [
+        (T("nav_health", lang), _cluster_health_page),
+        (T("nav_s1", lang), scenario1.render),
+        (T("nav_s2", lang), scenario2.render),
+        (T("nav_s3", lang), scenario3.render),
+    ]
+    page_names = [p[0] for p in page_defs]
+    page_func_map = dict(page_defs)
+
+    page = st.radio(T("nav_label", lang), page_names, label_visibility="collapsed")
+
+page_func_map[page]()

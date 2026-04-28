@@ -25,6 +25,7 @@ and after the transfer, which is verified in the consistency check panel.
 import streamlit as st
 import pandas as pd
 from src.db import get_connection, fetch_accounts, get_total_balance
+from src.strings import T
 
 
 def _do_transfer(src_id: int, dst_id: int, amount: float) -> dict:
@@ -128,12 +129,10 @@ def _do_transfer(src_id: int, dst_id: int, amount: float) -> dict:
 
 def render() -> None:
     """Render the Scenario 1 page in the Streamlit application."""
-    st.header("Scenario 1: Successful Distributed Transaction")
-    st.write(
-        "This scenario transfers funds from an account on Node A to an account on Node B. "
-        "Oracle executes Two-Phase Commit automatically: it sends PREPARE to both nodes, "
-        "waits for READY responses, then issues COMMIT to both."
-    )
+    lang = st.session_state.get("lang", "VI")
+
+    st.header(T("s1_header", lang))
+    st.write(T("s1_intro", lang))
 
     col1, col2 = st.columns(2)
 
@@ -148,48 +147,52 @@ def render() -> None:
     b_options = {f"[B] {r['name']} (id={r['id']}, balance={r['balance']:.2f})": r["id"] for r in accounts_b}
 
     with col1:
-        src_label = st.selectbox("Debit account (Node A)", list(a_options.keys()))
+        src_label = st.selectbox(T("s1_debit_acct", lang), list(a_options.keys()))
         src_id = a_options[src_label]
     with col2:
-        dst_label = st.selectbox("Credit account (Node B)", list(b_options.keys()))
+        dst_label = st.selectbox(T("s1_credit_acct", lang), list(b_options.keys()))
         dst_id = b_options[dst_label]
 
-    amount = st.number_input("Transfer amount", min_value=1.0, max_value=50000.0, value=500.0, step=100.0)
+    amount = st.number_input(T("s1_amount", lang), min_value=1.0, max_value=50000.0, value=500.0, step=100.0)
 
-    if st.button("Execute Transfer", type="primary"):
-        with st.spinner("Executing distributed transaction..."):
+    if st.button(T("s1_btn_transfer", lang), type="primary"):
+        with st.spinner(T("s1_spinner", lang)):
             try:
                 result = _do_transfer(src_id, dst_id, amount)
-                st.success("Transaction committed successfully.")
+                st.success(T("s1_success", lang))
 
-                st.subheader("2PC Phase Summary")
+                st.subheader(T("s1_phase_header", lang))
+                phase_col = T("s1_phase_col", lang)
                 phases = pd.DataFrame([
-                    {"Phase": "1 - PREPARE", "Node A": "READY", "Node B": "READY"},
-                    {"Phase": "2 - COMMIT",  "Node A": "COMMITTED", "Node B": "COMMITTED"},
+                    {phase_col: T("s1_phase_1", lang), "Node A": "READY",     "Node B": "READY"},
+                    {phase_col: T("s1_phase_2", lang), "Node A": "COMMITTED", "Node B": "COMMITTED"},
                 ])
                 st.dataframe(phases, use_container_width=True, hide_index=True)
 
-                st.subheader("Balance Changes on Node A")
+                st.subheader(T("s1_balance_a_header", lang))
                 df_before = pd.DataFrame(result["before_a"]).rename(columns={"balance": "balance_before"})
                 df_after  = pd.DataFrame(result["after_a"]).rename(columns={"balance": "balance_after"})
                 df_a = df_before.merge(df_after[["id", "balance_after"]], on="id")
                 df_a["delta"] = df_a["balance_after"] - df_a["balance_before"]
                 st.dataframe(df_a, use_container_width=True, hide_index=True)
 
-                st.subheader("Balances on Node B (after commit)")
+                st.subheader(T("s1_balance_b_header", lang))
                 st.dataframe(pd.DataFrame(result["after_b"]), use_container_width=True, hide_index=True)
 
-                st.subheader("Global Consistency Check")
+                st.subheader(T("s1_consistency_header", lang))
                 total_before = result["total_before"]
                 total_after  = result["total_after"]
+                metric_col = T("s1_metric_col", lang)
+                value_col  = T("s1_value_col", lang)
+                consistent = T("s1_consistent_yes", lang) if abs(total_before - total_after) < 0.01 else T("s1_consistent_no", lang)
                 check_df = pd.DataFrame([
-                    {"Metric": "Sum (Node A) before transfer", "Value": f"{total_before:.2f}"},
-                    {"Metric": "Sum (Node A + Node B) after transfer", "Value": f"{total_after:.2f}"},
-                    {"Metric": "Consistent", "Value": "YES" if abs(total_before - total_after) < 0.01 else "NO"},
+                    {metric_col: T("s1_metric_sum_before", lang), value_col: f"{total_before:.2f}"},
+                    {metric_col: T("s1_metric_sum_after", lang),  value_col: f"{total_after:.2f}"},
+                    {metric_col: T("s1_metric_consistent", lang), value_col: consistent},
                 ])
                 st.dataframe(check_df, use_container_width=True, hide_index=True)
 
             except ValueError as exc:
-                st.error(str(exc))
+                st.error(T("s1_error_val", lang, exc=exc))
             except Exception as exc:
-                st.error(f"Transaction failed: {exc}")
+                st.error(T("s1_error_tx", lang, exc=exc))
