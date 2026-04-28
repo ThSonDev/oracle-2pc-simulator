@@ -62,7 +62,7 @@ STRINGS: dict[str, dict[str, str]] = {
         "s1_consistency_header": "Kiểm tra tính nhất quán toàn cục",
         "s1_metric_col": "Chỉ số",
         "s1_value_col": "Giá trị",
-        "s1_metric_sum_before": "Tổng (Node A) trước chuyển khoản",
+        "s1_metric_sum_before": "Tổng (Node A + Node B) trước chuyển khoản",
         "s1_metric_sum_after": "Tổng (Node A + Node B) sau chuyển khoản",
         "s1_metric_consistent": "Nhất quán",
         "s1_consistent_yes": "CÓ",

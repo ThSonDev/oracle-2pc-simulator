@@ -68,7 +68,8 @@ def _do_transfer(src_id: int, dst_id: int, amount: float) -> dict:
     try:
         with conn.cursor() as cur:
             before_a = fetch_accounts(conn)
-            total_before = get_total_balance(conn)
+            cur.execute("SELECT (SELECT SUM(balance) FROM account) + (SELECT SUM(balance) FROM account@node_b_link) FROM dual")
+            total_before = float(cur.fetchone()[0])
 
             # Lock the source row to prevent a concurrent transfer from
             # overdrawing the account between the balance check and the UPDATE.
