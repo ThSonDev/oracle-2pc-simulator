@@ -13,6 +13,14 @@ FROM python:3.11-slim
 
 WORKDIR /app
 
+# PYTHONPATH must include /app so that "from src.xxx import ..." resolves
+# correctly when Streamlit runs src/app.py.  Streamlit's script runner
+# replaces the empty-string sys.path entry (which points to CWD /app) with
+# the script's own directory (/app/src), which removes /app from the search
+# path.  Setting PYTHONPATH keeps /app reachable regardless of how Streamlit
+# manipulates sys.path at runtime.
+ENV PYTHONPATH=/app
+
 # Install Python dependencies before copying source code so that Docker
 # can cache this layer and avoid a full pip install on every code change.
 COPY requirements.txt .
